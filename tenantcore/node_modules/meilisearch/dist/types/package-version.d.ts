@@ -1,0 +1,2 @@
+export declare const PACKAGE_VERSION = "0.37.0";
+//# sourceMappingURL=package-version.d.ts.map

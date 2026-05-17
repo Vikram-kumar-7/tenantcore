@@ -1,0 +1,280 @@
+version: '3.9'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TenantCore — Full Infrastructure Stack
+# Run with: docker-compose up -d
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-common-env: &common-env
+  NODE_ENV: production
+  MONGODB_MASTER_URI: mongodb://mongo:27017/tenantcore_master
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  MINIO_ENDPOINT: minio
+  MINIO_PORT: 9000
+  MINIO_USE_SSL: "false"
+  MINIO_ACCESS_KEY: minioadmin
+  MINIO_SECRET_KEY: minioadmin123
+  MEILISEARCH_HOST: http://meilisearch:7700
+  MEILISEARCH_ADMIN_API_KEY: masterKey
+  LOKI_HOST: http://loki:3100
+  JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+
+services:
+
+  # ─── Main API Server ───────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: tenantcore-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      <<: *common-env
+      PORT: 3000
+    env_file:
+      - .env
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - api-logs:/app/logs
+    networks:
+      - tenantcore-net
+
+  # ─── Background Workers ────────────────────────────────────────────────────
+  workers:
+    build:
+      context: ./apps/workers
+      dockerfile: Dockerfile
+    container_name: tenantcore-workers
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+    env_file:
+      - .env
+    depends_on:
+      - api
+      - mongo
+      - redis
+    networks:
+      - tenantcore-net
+
+  # ─── React Admin Dashboard ─────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./apps/dashboard
+      dockerfile: Dockerfile
+    container_name: tenantcore-dashboard
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    networks:
+      - tenantcore-net
+
+  # ─── Nginx Reverse Proxy ───────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: tenantcore-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx-certs:/etc/nginx/certs
+    depends_on:
+      - api
+      - dashboard
+    networks:
+      - tenantcore-net
+
+  # ─── MongoDB ───────────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7.0
+    container_name: tenantcore-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - tenantcore-net
+    command: ["--wiredTigerCacheSizeGB", "1"]
+
+  mongo-tenant1:
+    image: mongo:7.0
+    container_name: tenantcore-mongo-tenant1
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    networks:
+      - tenantcore-net
+
+  mongo-tenant2:
+    image: mongo:7.0
+    container_name: tenantcore-mongo-tenant2
+    restart: unless-stopped
+    ports:
+      - "27019:27017"
+    networks:
+      - tenantcore-net
+
+  # ─── Redis ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: tenantcore-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - tenantcore-net
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+
+  # ─── MinIO Object Storage ─────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: tenantcore-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"   # MinIO Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - tenantcore-net
+    command: server /data --console-address ":9001"
+
+  # ─── Meilisearch ─────────────────────────────────────────────────────────
+  meilisearch:
+    image: getmeili/meilisearch:v1.5
+    container_name: tenantcore-meilisearch
+    restart: unless-stopped
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_MASTER_KEY: masterKey
+      MEILI_ENV: production
+    volumes:
+      - meilisearch-data:/meili_data
+    networks:
+      - tenantcore-net
+
+  # ─── Prometheus ──────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: tenantcore-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - tenantcore-net
+
+  # ─── Grafana ─────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: tenantcore-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - tenantcore-net
+
+  # ─── Loki (Log Aggregation) ───────────────────────────────────────────────
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: tenantcore-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/loki/loki-config.yml:/etc/loki/config.yml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/config.yml
+    networks:
+      - tenantcore-net
+
+  # ─── Jaeger (Distributed Tracing) ────────────────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    container_name: tenantcore-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "14268:14268"   # HTTP collector
+      - "6831:6831/udp" # UDP agent
+    environment:
+      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
+    networks:
+      - tenantcore-net
+
+# ─── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  mongo-data:
+  mongo-config:
+  redis-data:
+  minio-data:
+  meilisearch-data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  api-logs:
+  nginx-certs:
+
+# ─── Networks ─────────────────────────────────────────────────────────────────
+networks:
+  tenantcore-net:
+    driver: bridge

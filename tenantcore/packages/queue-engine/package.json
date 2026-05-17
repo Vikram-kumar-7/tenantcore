@@ -1,0 +1,13 @@
+{
+  "name": "@tenantcore/queue-engine",
+  "version": "1.0.0",
+  "description": "Redis-backed job queue engine for TenantCore",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "dependencies": {
+    "ioredis": "^5.3.2",
+    "uuid": "^9.0.0"
+  }
+}

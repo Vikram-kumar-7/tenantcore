@@ -1,0 +1,73 @@
+version: '3.9'
+
+# Development override — hot reload, exposed ports, no Nginx
+services:
+
+  api:
+    build:
+      context: ./apps/api
+      target: development
+    volumes:
+      - ./apps/api:/app
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+    command: npm run dev
+    ports:
+      - "3000:3000"
+
+  workers:
+    build:
+      context: ./apps/workers
+      target: development
+    volumes:
+      - ./apps/workers:/app
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+    command: npm run dev
+
+  mongo:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-dev-data:/data/db
+
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-dev-data:/data
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.5
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_MASTER_KEY: masterKey
+      MEILI_ENV: development
+    volumes:
+      - meilisearch-dev-data:/meili_data
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    ports:
+      - "16686:16686"
+      - "14268:14268"
+
+volumes:
+  mongo-dev-data:
+  minio-dev-data:
+  meilisearch-dev-data:
