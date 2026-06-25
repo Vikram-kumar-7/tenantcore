@@ -7,6 +7,8 @@
 [![Redis](https://img.shields.io/badge/Redis-7.2-red)](https://redis.io)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue)](https://docker.com)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+[![CI](https://github.com/Vikram-kumar-7/tenantcore/actions/workflows/ci.yml/badge.svg)](https://github.com/Vikram-kumar-7/tenantcore/actions/workflows/ci.yml)
+
 
 ---
 
